@@ -33,17 +33,19 @@ app = FastAPI(
 app.include_router(auth_router)
 app.include_router(profile_router)
 app.include_router(discovery_router)
+
+origins = [
+    "http://localhost:3000",
+    "https://devscoutai.c4you.in",
+]
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=[
-        "http://localhost:3000",
-        "http://127.0.0.1:3000",
-    ],
+    allow_origins=origins,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
-
 
 class SearchRequest(BaseModel):
     query: str = Field(

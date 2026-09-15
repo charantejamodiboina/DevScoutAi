@@ -6,6 +6,7 @@ from pydantic import BaseModel, Field
 
 from app.database import (
     discovery_cache_collection,
+    search_history_collection,
     user_profiles_collection,
 )
 from app.dependencies.user import get_current_user_id
@@ -287,7 +288,28 @@ async def run_personalized_discovery(
     )
 
     generated_at = datetime.now(timezone.utc)
+# Record discovery in search history
+    history_data = {
+        "user_id": user_id,
+        "query": (
+            f"Personalized "
+            f"{request.opportunity_type} discovery"
+        ),
+        "original_query": (
+            f"{request.opportunity_type} discovery"
+            + (
+                f" in {request.location}"
+                if request.location
+                else ""
+            )
+        ),
+        "num_results": len(opportunities),
+        "searched_at": generated_at,
+    }
 
+    await search_history_collection.insert_one(
+        history_data
+)
     # Cache feed
     cache_data = {
         "generated_queries": queries,

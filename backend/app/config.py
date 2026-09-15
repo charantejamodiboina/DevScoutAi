@@ -9,6 +9,10 @@ class Settings(BaseSettings):
     OPENAI_API_KEY: str
     GEMINI_API_KEY: str
 
+    # AI fallback providers
+    GROQ_API_KEY: str | None = None
+    OPENROUTER_API_KEY: str | None = None
+
     JWT_SECRET_KEY: str
     JWT_ALGORITHM: str
     ACCESS_TOKEN_EXPIRE_MINUTES: int

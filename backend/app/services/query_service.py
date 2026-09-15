@@ -2,14 +2,205 @@ import asyncio
 import json
 
 from google import genai
-from google.genai import errors
+
+from openai import AsyncOpenAI
 
 from app.config import settings
 
 
-client = genai.Client(
+# -----------------------------
+# Gemini client
+# -----------------------------
+
+gemini_client = genai.Client(
     api_key=settings.GEMINI_API_KEY
 )
+
+
+# -----------------------------
+# Groq client
+# -----------------------------
+
+groq_client = (
+    AsyncOpenAI(
+        api_key=settings.GROQ_API_KEY,
+        base_url="https://api.groq.com/openai/v1",
+    )
+    if settings.GROQ_API_KEY
+    else None
+)
+
+
+# -----------------------------
+# OpenRouter client
+# -----------------------------
+
+openrouter_client = (
+    AsyncOpenAI(
+        api_key=settings.OPENROUTER_API_KEY,
+        base_url="https://openrouter.ai/api/v1",
+    )
+    if settings.OPENROUTER_API_KEY
+    else None
+)
+
+
+async def parse_queries(
+    response_text: str,
+    count: int,
+):
+    """
+    Parse and validate AI-generated search queries.
+    """
+
+    try:
+        data = json.loads(response_text)
+    except json.JSONDecodeError:
+        print("AI returned invalid JSON")
+        print(response_text)
+        return []
+
+    queries = data.get("queries", [])
+
+    if not isinstance(queries, list):
+        print("Queries is not a list")
+        return []
+
+    queries = [
+        query.strip()
+        for query in queries
+        if isinstance(query, str)
+        and query.strip()
+    ]
+
+    # Remove duplicates while preserving order
+    queries = list(dict.fromkeys(queries))
+
+    print("FINAL QUERIES:")
+    print(queries)
+
+    return queries[:count]
+
+
+async def generate_with_gemini(
+    prompt: str,
+    count: int,
+):
+    """
+    Generate queries using Gemini.
+    """
+
+    model = "gemini-3.6-flash"
+
+    print("\n--- TRYING GEMINI ---")
+
+    response = await gemini_client.aio.models.generate_content(
+        model=model,
+        contents=prompt,
+        config={
+            "response_mime_type": "application/json",
+        },
+    )
+
+    print("GEMINI RAW RESPONSE:")
+    print(response.text)
+
+    return await parse_queries(
+        response.text,
+        count,
+    )
+
+
+async def generate_with_groq(
+    prompt: str,
+    count: int,
+):
+    """
+    Generate queries using Groq.
+    """
+
+    if not groq_client:
+        print("GROQ_API_KEY not configured")
+        return []
+
+    print("\n--- TRYING GROQ ---")
+
+    response = await groq_client.chat.completions.create(
+        model="openai/gpt-oss-20b",
+        messages=[
+            {
+                "role": "system",
+                "content": (
+                    "You are a search query generation "
+                    "system. Return ONLY valid JSON."
+                ),
+            },
+            {
+                "role": "user",
+                "content": prompt,
+            },
+        ],
+        response_format={
+            "type": "json_object",
+        },
+        temperature=0.2,
+    )
+
+    response_text = response.choices[0].message.content
+
+    print("GROQ RAW RESPONSE:")
+    print(response_text)
+
+    return await parse_queries(
+        response_text,
+        count,
+    )
+
+
+async def generate_with_openrouter(
+    prompt: str,
+    count: int,
+):
+    """
+    Generate queries using OpenRouter.
+    """
+
+    if not openrouter_client:
+        print("OPENROUTER_API_KEY not configured")
+        return []
+
+    print("\n--- TRYING OPENROUTER ---")
+
+    response = await openrouter_client.chat.completions.create(
+        model="openrouter/free",
+        messages=[
+            {
+                "role": "system",
+                "content": (
+                    "You are a search query generation "
+                    "system. Return ONLY valid JSON."
+                ),
+            },
+            {
+                "role": "user",
+                "content": prompt,
+            },
+        ],
+        response_format={
+            "type": "json_object",
+        },
+        temperature=0.2,
+    )
+
+    response_text = response.choices[0].message.content
+
+    print("OPENROUTER RAW RESPONSE:")
+    print(response_text)
+
+    return await parse_queries(
+        response_text,
+        count,
+    )
 
 
 async def generate_search_queries(
@@ -18,13 +209,26 @@ async def generate_search_queries(
     location: str | None,
     count: int,
 ):
-    skills = user_profile.get("skills", [])
-    interests = user_profile.get("interests", [])
-    job_roles = user_profile.get("job_roles", [])
+    skills = user_profile.get(
+        "skills",
+        [],
+    )
+
+    interests = user_profile.get(
+        "interests",
+        [],
+    )
+
+    job_roles = user_profile.get(
+        "job_roles",
+        [],
+    )
+
     experience_years = user_profile.get(
         "experience_years",
         0,
     )
+
     preferred_locations = user_profile.get(
         "preferred_locations",
         [],
@@ -95,65 +299,63 @@ Use exactly this format:
 }}
 """
 
-    models = [
-        "gemini-3.6-flash",
+    # -----------------------------------
+    # Provider fallback chain
+    # -----------------------------------
+
+    providers = [
+        (
+            "Gemini",
+            generate_with_gemini,
+        ),
+        (
+            "Groq",
+            generate_with_groq,
+        ),
+        (
+            "OpenRouter",
+            generate_with_openrouter,
+        ),
     ]
 
     last_error = None
 
-    for model in models:
-        try:
-            print(f"\n--- TRYING MODEL: {model} ---")
+    for provider_name, provider_function in providers:
 
-            response = await client.aio.models.generate_content(
-                model=model,
-                contents=prompt,
-                config={
-                    "response_mime_type": "application/json",
-                },
+        try:
+            queries = await provider_function(
+                prompt,
+                count,
             )
 
-            print("RAW RESPONSE:")
-            print(response.text)
-
-            data = json.loads(response.text)
-
-            print("PARSED DATA:")
-            print(data)
-
-            queries = data.get("queries", [])
-
-            print("QUERIES:")
-            print(queries)
-
-            if not isinstance(queries, list):
-                print("Queries is not a list")
-                queries = []
-
-            queries = [
-                query.strip()
-                for query in queries
-                if isinstance(query, str)
-                and query.strip()
-            ]
-
-            print("FINAL QUERIES:")
-            print(queries)
-
             if queries:
+                print(
+                    f"\nSUCCESS: {provider_name}"
+                )
+
                 return queries[:count]
 
-            print("MODEL RETURNED EMPTY QUERIES")
+            print(
+                f"{provider_name} returned "
+                "empty queries"
+            )
 
         except Exception as error:
-            print(f"\nERROR WITH {model}:")
+
+            print(
+                f"\nERROR WITH {provider_name}:"
+            )
+
             print(repr(error))
 
             last_error = error
 
+            # Small delay before next provider
             await asyncio.sleep(1)
 
-            continue
+    # -----------------------------------
+    # All providers failed
+    # -----------------------------------
 
     if last_error:
         raise last_error
